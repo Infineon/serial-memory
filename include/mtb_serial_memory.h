@@ -105,6 +105,9 @@
 extern "C" {
 #endif
 
+/** The major version of the serial memory asset */
+#define MTB_SERIAL_MEMORY_VERSION_MAJOR               (3U)
+
 /** The function or operation is not supported on the target or the memory */
 #define MTB_RSLT_SERIAL_MEMORY_ERR_UNSUPPORTED \
     (CY_RSLT_CREATE(CY_RSLT_TYPE_ERROR, CY_RSLT_MODULE_BOARD_LIB_SERIAL_MEMORY, 1))
@@ -148,15 +151,14 @@ typedef enum
  */
 typedef struct
 {
-    uint32_t smif_instance;
     uint32_t smif_active_slot;
     SMIF_Type*                          base;
     const mtb_hal_clock_t*              clock;
-    cy_stc_smif_context_t* context;
     uint32_t configured_csel;
     uint32_t chip_select;
-    const cy_stc_smif_block_config_t* smif_block_config;
     uint32_t status_flags;
+    cy_stc_smif_mem_context_t* mem_context;
+    cy_stc_smif_mem_info_t* mem_info;
 
     #if defined(MTB_SERIAL_MEMORY_THREAD_SAFE)
     cy_mutex_t mutex;
@@ -175,12 +177,18 @@ typedef struct
  * because the mtb_serial_memory_setup() function might be executed from the
  * external memory itself, and resetting the memory controller could disrupt
  * the communication with the memory.
+ * This function initializes the slots of the memory device in the SMIF configuration. It's security
+ * aware and is a wrapper around Cy_SMIF_MemNumInit, and gather all information about the memory
+ * size, erase and program size to be used in subsequent serial memory calls.
+ * It can either be called in a secure partition or in the non-secure partition
+ * if the peripheral itself is not secured.
  *
  * \param obj Pointer to the mtb_serial_memory_t object to setup
  * \param smif_active_chip The slave select line to configure as active
  * \param base Pointer to the SMIf base address
  * \param clock Pointer to the clock object
- * \param context Pointer to the SMIF ip context structure
+ * \param mem_context Pointer to the SMIF Device internal context data
+ * \param mem_info Pointer to the SMIF memory info structure
  * \param block_config Pointer to the SMIF block configuration structure
  * \returns CY_RSLT_SUCCESS if the setup was successful, an error code
  *          otherwise.
@@ -190,8 +198,35 @@ cy_rslt_t mtb_serial_memory_setup(
     mtb_serial_memory_chip_select_t smif_active_chip,
     SMIF_Type* base,
     const mtb_hal_clock_t* clock,
-    cy_stc_smif_context_t* context,
+    cy_stc_smif_mem_context_t* mem_context,
+    cy_stc_smif_mem_info_t* mem_info,
     const cy_stc_smif_block_config_t* block_config);
+
+
+#if !defined(COMPONENT_SECURE_DEVICE)
+/**
+ * \brief Sets up the serial memory on non-secure world if the peripheral is secure
+ *
+ * \note This function is to be called from the non secure partition in trustzone
+ * devices (after the secure one has successfully called \ref mtb_serial_memory_setup )
+ * to set up the context and gather all information about the memory size,
+ * erase and program size to be used in subsequent serial memory calls.
+ *
+ * \param obj Pointer to the mtb_serial_memory_t object to setup
+ * \param smif_active_chip The slave select line to configure as active
+ * \param base Pointer to the SMIf base address
+ * \param mem_context Pointer to the SMIF Device internal context data
+ * \param mem_info Pointer to the SMIF memory info structure
+ * \returns CY_RSLT_SUCCESS if the setup was successful, an error code
+ *          otherwise.
+ */
+cy_rslt_t mtb_serial_memory_setup_nonsecure(
+    mtb_serial_memory_t* obj,
+    mtb_serial_memory_chip_select_t smif_active_chip,
+    SMIF_Type* base,
+    cy_stc_smif_mem_context_t* mem_context,
+    cy_stc_smif_mem_info_t* mem_info);
+#endif
 
 
 /**
