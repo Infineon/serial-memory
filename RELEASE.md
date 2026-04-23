@@ -8,6 +8,8 @@ Provides functions for interacting with an external memory connected through its
 * Allows for providing information to the programming tool to program the external memory.
 
 ### What Changed?
+#### v3.2.0
+* Fixed an issue with enabling octal mode for SMIF
 #### v3.1.0
 * Documentation update
 #### v3.0.0
@@ -44,22 +46,22 @@ This version of the Serial Flash library was validated for compatibility with th
 
 | Software and Tools                        | Version |
 | :---                                      | :----:  |
-| ModusToolbox™ Software Environment        | 3.2.0   |
-| GCC Compiler                              | 11.3.1  |
-| IAR Compiler                              | 9.40.2  |
-| ARM Compiler 6                            | 6.11    |
+| ModusToolbox™ Software Environment        | 3.8.0   |
+| GCC Compiler                              | 14.2.1  |
+| IAR Compiler                              | 9.50.2  |
+| ARM Compiler 6                            | 6.22    |
 
-Minimum required ModusToolbox™ Software Environment: v3.0
+Minimum required ModusToolbox™ Software Environment: v3.6
 
 ### More information
 
 * [API Reference Guide](https://infineon.github.io/serial-memory/html/index.html)
-* [Cypress Semiconductor, an Infineon Technologies Company](http://www.cypress.com)
+* [Infineon](http://www.infineon.com)
 * [Infineon GitHub](https://github.com/infineon)
-* [ModusToolbox™](https://www.cypress.com/products/modustoolbox-software-environment)
-* [PSoC™ 6 Code Examples using ModusToolbox™ IDE](https://github.com/infineon/Code-Examples-for-ModusToolbox-Software)
+* [ModusToolbox Software Environment, Quick Start Guide, Documentation, and Videos](https://www.infineon.com/cms/en/design-support/tools/sdk/modustoolbox-software/)
 * [ModusToolbox™ Software](https://github.com/Infineon/modustoolbox-software)
-* [PSoC™ 6 Resources - KBA223067](https://community.cypress.com/docs/DOC-14644)
 
 ---
-© Cypress Semiconductor Corporation (an Infineon company) or an affiliate of Cypress Semiconductor Corporation, 2019-2024.
+# Copyright
+(c) (2019-2026), Infineon Technologies AG, or an affiliate of Infineon
+Technologies AG.  All rights reserved.

@@ -269,22 +269,32 @@ static cy_rslt_t _mtb_serial_memory_enable_octal_mode_if_needed(mtb_serial_memor
              dataWidth == CY_SMIF_WIDTH_OCTAL))
         {
             cy_en_smif_data_rate_t dataRate = _mtb_serial_memory_compute_data_rate(obj);
+            cy_en_smif_capture_mode_t requiredMode = (dataRate == CY_SMIF_DDR) ?
+                                                     CY_SMIF_SEL_XSPI_HYPERBUS_WITH_DQS :
+                                                     CY_SMIF_SEL_NORMAL_SPI;
+            cy_en_smif_capture_mode_t currentMode = (cy_en_smif_capture_mode_t)
+                                                    _FLD2VAL(SMIF_CORE_CTL2_RX_CAPTURE_MODE, SMIF_CTL2(
+                                                                 obj->base));
 
-            smif_status = Cy_SMIF_MemOctalEnable(obj->base,
-                                                 obj->mem_context->block_config->memConfig[obj->
-                                                                                           smif_active_slot],
-                                                 dataRate,
-                                                 &obj->mem_context->smif_context);
+            // Skip octal enable and capture mode reconfiguration if SMIF is already
+            // in the correct capture mode to avoid the SMIF Disable/Enable
+            // cycle that can hang when code executes from XIP on the same flash.
+            if (currentMode != requiredMode)
+            {
+                smif_status = Cy_SMIF_MemOctalEnable(obj->base,
+                                                     obj->mem_context->block_config->memConfig[obj->
+                                                                                               smif_active_slot],
+                                                     dataRate,
+                                                     &obj->mem_context->smif_context);
 
-            if (CY_SMIF_SUCCESS == smif_status)
-            {
-                result = _mtb_serial_memory_set_rx_capture_mode(obj,
-                                                                (dataRate ==
-                                                                 CY_SMIF_DDR) ? CY_SMIF_SEL_XSPI_HYPERBUS_WITH_DQS : CY_SMIF_SEL_NORMAL_SPI);
-            }
-            else
-            {
-                result = MTB_RSLT_SERIAL_MEMORY_ERR_OCTAL_ENABLE;
+                if (CY_SMIF_SUCCESS == smif_status)
+                {
+                    result = _mtb_serial_memory_set_rx_capture_mode(obj, requiredMode);
+                }
+                else
+                {
+                    result = MTB_RSLT_SERIAL_MEMORY_ERR_OCTAL_ENABLE;
+                }
             }
         }
     }
@@ -331,9 +341,19 @@ static cy_rslt_t _mtb_serial_memory_set_capture_mode_if_needed(mtb_serial_memory
                  dataWidth == CY_SMIF_WIDTH_OCTAL))
             {
                 cy_en_smif_data_rate_t dataRate = _mtb_serial_memory_compute_data_rate(obj);
+                cy_en_smif_capture_mode_t requiredMode = (dataRate == CY_SMIF_DDR) ?
+                                                         CY_SMIF_SEL_XSPI_HYPERBUS_WITH_DQS :
+                                                         CY_SMIF_SEL_NORMAL_SPI;
+                cy_en_smif_capture_mode_t currentMode = (cy_en_smif_capture_mode_t)
+                                                        _FLD2VAL(SMIF_CORE_CTL2_RX_CAPTURE_MODE, SMIF_CTL2(
+                                                                     obj->base));
 
-                status = _mtb_serial_memory_set_rx_capture_mode(obj, (dataRate == CY_SMIF_DDR) ?
-                                                                CY_SMIF_SEL_XSPI_HYPERBUS_WITH_DQS : CY_SMIF_SEL_NORMAL_SPI);
+                // Skip the SMIF Disable/Enable cycle if capture mode already matches, disabling
+                // SMIF while executing from XIP on the same flash causes a hang.
+                if (currentMode != requiredMode)
+                {
+                    status = _mtb_serial_memory_set_rx_capture_mode(obj, requiredMode);
+                }
             }
         }
     }

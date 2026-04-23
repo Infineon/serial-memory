@@ -27,8 +27,7 @@
  **************************************************************************************************/
 
 /**
- * \addtogroup group_board_libs Serial Memory
- * \ingroup group_lib_impl
+ * \addtogroup group_api_reference Serial Memory
  * \{
  *
  * \section section_qspi_configurator_to_smif QSPI configurator slave slot correlation with pins
@@ -375,4 +374,4 @@ cy_rslt_t mtb_serial_memory_set_write_enable(mtb_serial_memory_t* obj, bool enab
 
 #endif // CY_IP_MXSMIF
 
-/** \} group_board_libs */
+/** \} group_api_reference */

@@ -29,7 +29,7 @@
  **************************************************************************************************/
 
 /**
- * \addtogroup group_board_libs
+ * \addtogroup group_api_reference
  * \{
  * In addition to the APIs for reading and writing to memory at runtime, this library also
  * provides support for informing programming tools about the external memory so it can be
@@ -39,8 +39,7 @@
  * sections must be provided by the linker script for the application. One the application
  * has been built, these locations can be read by programming tools (eg: Cypress Programmer,
  * OpenOCD, pyOCD) to know that there is a memory device attached and how to program it.
- * \note This support is not compatible with the PSoC™ 64 series of devices.
- * \} group_board_libs
+ * \} group_api_reference
  */
 
 #include <stdint.h>
