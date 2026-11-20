@@ -25,7 +25,8 @@
 var NAVTREE =
 [
   [ "Serial Memory", "index.html", [
-    [ "API Reference", "modules.html", "modules" ]
+    [ "Serial Memory - External SPI Memory Interface Library for ModusToolbox™", "index.html", "index" ],
+    [ "API Reference", "topics.html", "topics" ]
   ] ]
 ];
 
@@ -34,5 +35,6 @@ var NAVTREEINDEX =
 "group__group__api__reference.html"
 ];
 
-var SYNCONMSG = 'click to disable panel synchronisation';
-var SYNCOFFMSG = 'click to enable panel synchronisation';
+var SYNCONMSG = 'click to disable panel synchronization';
+var SYNCOFFMSG = 'click to enable panel synchronization';
+var LISTOFALLMEMBERS = 'List of all members';

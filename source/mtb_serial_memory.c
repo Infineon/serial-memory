@@ -8,7 +8,7 @@
  *
  ***************************************************************************************************
  * \copyright
- * Copyright 2018-2024 Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2018-2026 Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -42,7 +42,16 @@ extern "C" {
 /** Timeout to apply while polling the memory for its ready status after quad
  *  enable command has been sent out. Quad enable is a non-volatile write.
  */
+#ifndef MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US
 #define MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US    (5000lu) // in microseconds
+#endif /* MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US */
+
+/** Number of attempts to read the QE bit back after the quad enable command has
+ *  been sent out. The quad enable command is not resent between the attempts.
+ */
+#ifndef MTB_SERIAL_MEMORY_QUAD_ENABLE_MAX_ATTEMPTS
+#define MTB_SERIAL_MEMORY_QUAD_ENABLE_MAX_ATTEMPTS  (3lu)
+#endif /* MTB_SERIAL_MEMORY_QUAD_ENABLE_MAX_ATTEMPTS */
 
 /** Number of loops to run while polling the SMIF for its busy status. */
 #define _MTB_SERIAL_MEMORY_SMIF_BUSY_CHECK_LOOP_COUNT                  (10lu)
@@ -191,6 +200,36 @@ static inline cy_rslt_t _mtb_serial_memory_mutex_release(mtb_serial_memory_t* ob
 
 
 //--------------------------------------------------------------------------------------------------
+// _mtb_serial_memory_is_sector_boundary
+//--------------------------------------------------------------------------------------------------
+// addr equal to the memory size (the end of the last sector) is a boundary. For hybrid memories the
+// offset is taken from the start of the region that contains addr.
+static bool _mtb_serial_memory_is_sector_boundary(mtb_serial_memory_t* obj, uint32_t addr)
+{
+    uint32_t sector_size = obj->mem_info->eraseSize;
+    uint32_t region_start = 0UL;
+
+    if (addr == obj->mem_info->memSize)
+    {
+        return true;
+    }
+
+    for (uint32_t idx = 0UL; idx < obj->mem_info->hybridRegionCount; idx++)
+    {
+        if ((addr >= obj->mem_info->hybridRegionInfo[idx].regionStartAddress) &&
+            (addr < obj->mem_info->hybridRegionInfo[idx].regionEndAddress))
+        {
+            sector_size = obj->mem_info->hybridRegionInfo[idx].eraseSize;
+            region_start = obj->mem_info->hybridRegionInfo[idx].regionStartAddress;
+            break;
+        }
+    }
+
+    return (0UL == sector_size) || (0UL == ((addr - region_start) % sector_size));
+}
+
+
+//--------------------------------------------------------------------------------------------------
 // _mtb_serial_memory_compute_data_rate
 //--------------------------------------------------------------------------------------------------
 cy_en_smif_data_rate_t _mtb_serial_memory_compute_data_rate(mtb_serial_memory_t* obj)
@@ -272,13 +311,19 @@ static cy_rslt_t _mtb_serial_memory_enable_octal_mode_if_needed(mtb_serial_memor
             cy_en_smif_capture_mode_t requiredMode = (dataRate == CY_SMIF_DDR) ?
                                                      CY_SMIF_SEL_XSPI_HYPERBUS_WITH_DQS :
                                                      CY_SMIF_SEL_NORMAL_SPI;
+            #if (CY_SMIF_DRV_VERSION_MAJOR > 2) || ((CY_SMIF_DRV_VERSION_MAJOR == 2) && \
+            (CY_SMIF_DRV_VERSION_MINOR >= 140))
+            cy_en_smif_capture_mode_t currentMode = Cy_SMIF_GetRxCaptureMode(obj->base);
+            #else
             cy_en_smif_capture_mode_t currentMode = (cy_en_smif_capture_mode_t)
-                                                    _FLD2VAL(SMIF_CORE_CTL2_RX_CAPTURE_MODE, SMIF_CTL2(
-                                                                 obj->base));
+                                                    _FLD2VAL(SMIF_CORE_CTL2_RX_CAPTURE_MODE,
+                                                             SMIF_CTL2(obj->base));
+            #endif
 
             // Skip octal enable and capture mode reconfiguration if SMIF is already
             // in the correct capture mode to avoid the SMIF Disable/Enable
             // cycle that can hang when code executes from XIP on the same flash.
+            // The caller must have put the memory in Octal mode, see the setup note in the header.
             if (currentMode != requiredMode)
             {
                 smif_status = Cy_SMIF_MemOctalEnable(obj->base,
@@ -318,9 +363,14 @@ static cy_rslt_t _mtb_serial_memory_set_capture_mode_if_needed(mtb_serial_memory
         // If we want to perform SFDP we need the SMIF to be configured in NORMAL SPI MODE as the
         // protocol is working in single SPI mode. Therefore if a previous setting had put the
         // memory in XSPI mode we need to revert it so that we can perform SFDP correctly.
-        if ((obj->base->CTL2 & SMIF_CORE_CTL2_RX_CAPTURE_MODE_Msk) >>
-            SMIF_CORE_CTL2_RX_CAPTURE_MODE_Pos ==
+        #if (CY_SMIF_DRV_VERSION_MAJOR > 2) || ((CY_SMIF_DRV_VERSION_MAJOR == 2) && \
+        (CY_SMIF_DRV_VERSION_MINOR >= 140))
+        if (Cy_SMIF_GetRxCaptureMode(obj->base) == CY_SMIF_SEL_XSPI_HYPERBUS_WITH_DQS)
+        #else
+        if ((cy_en_smif_capture_mode_t)_FLD2VAL(SMIF_CORE_CTL2_RX_CAPTURE_MODE,
+                                                SMIF_CTL2(obj->base)) ==
             CY_SMIF_SEL_XSPI_HYPERBUS_WITH_DQS)
+        #endif
         {
             status = _mtb_serial_memory_set_rx_capture_mode(obj, CY_SMIF_SEL_NORMAL_SPI);
         }
@@ -344,9 +394,14 @@ static cy_rslt_t _mtb_serial_memory_set_capture_mode_if_needed(mtb_serial_memory
                 cy_en_smif_capture_mode_t requiredMode = (dataRate == CY_SMIF_DDR) ?
                                                          CY_SMIF_SEL_XSPI_HYPERBUS_WITH_DQS :
                                                          CY_SMIF_SEL_NORMAL_SPI;
+                #if (CY_SMIF_DRV_VERSION_MAJOR > 2) || ((CY_SMIF_DRV_VERSION_MAJOR == 2) && \
+                (CY_SMIF_DRV_VERSION_MINOR >= 140))
+                cy_en_smif_capture_mode_t currentMode = Cy_SMIF_GetRxCaptureMode(obj->base);
+                #else
                 cy_en_smif_capture_mode_t currentMode = (cy_en_smif_capture_mode_t)
-                                                        _FLD2VAL(SMIF_CORE_CTL2_RX_CAPTURE_MODE, SMIF_CTL2(
-                                                                     obj->base));
+                                                        _FLD2VAL(SMIF_CORE_CTL2_RX_CAPTURE_MODE,
+                                                                 SMIF_CTL2(obj->base));
+                #endif
 
                 // Skip the SMIF Disable/Enable cycle if capture mode already matches, disabling
                 // SMIF while executing from XIP on the same flash causes a hang.
@@ -389,6 +444,21 @@ cy_rslt_t mtb_serial_memory_setup(
     CY_ASSERT(NULL != mem_info);
     CY_ASSERT(NULL != block_config);
 
+    bool chip_configured = false;
+    for (uint32_t i = 0; i < block_config->memCount; i++)
+    {
+        if (block_config->memConfig[i]->slaveSelect ==
+            (cy_en_smif_slave_select_t)smif_active_chip)
+        {
+            chip_configured = true;
+            break;
+        }
+    }
+    if (!chip_configured)
+    {
+        return MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM;
+    }
+
     mem_context->block_config = block_config;
     obj->chip_select = smif_active_chip;
     obj->base = base;
@@ -414,10 +484,10 @@ cy_rslt_t mtb_serial_memory_setup(
                               block_config->memConfig[idx]->dataSelect);
     }
 
-    uint32_t current_freq = (mtb_hal_clock_get_hf_clock_freq(obj->clock->clock_ref)) / 1000000U;
+    uint32_t current_freq_hz = mtb_hal_clock_get_hf_clock_freq(obj->clock->clock_ref);
     #if (CY_IP_MXSMIF_VERSION >= 2)
     //Internal divider of value 2 always present for MXSMIF v2 onwards
-    current_freq /= 2;
+    current_freq_hz /= 2;
     #endif /* (CY_IP_MXSMIF_VERSION >= 2) or other */
 
     /* Iterate through the memory configurations and check if SFDP detection flag is set */
@@ -425,7 +495,7 @@ cy_rslt_t mtb_serial_memory_setup(
     {
         if (0 != (block_config->memConfig[i]->flags & CY_SMIF_FLAG_DETECT_SFDP))
         {
-            if (current_freq > _MTB_SERIAL_MEMORY_MAX_SFDP_FREQ)
+            if (current_freq_hz > _MTB_SERIAL_MEMORY_MAX_SFDP_FREQ)
             {
                 result = MTB_RSLT_SERIAL_MEMORY_ERR_UNSUPPORTED;
                 break;
@@ -442,7 +512,7 @@ cy_rslt_t mtb_serial_memory_setup(
         // and gone through the octal enable process.
         result = _mtb_serial_memory_set_capture_mode_if_needed(obj);
         if (CY_SMIF_SUCCESS == result)
-        #endif // if (CY_IP_MXSMIF_VERSION >= 5)
+        #endif // if (CY_IP_MXSMIF_VERSION >= 4)
         {
             cy_en_smif_status_t smif_status = CY_SMIF_SUCCESS;
             result = CY_RSLT_SUCCESS;
@@ -471,19 +541,41 @@ cy_rslt_t mtb_serial_memory_setup(
                     {
                         bool isQuadEnabled = false;
                         smif_status =
-                            Cy_SMIF_MemIsQuadEnabled(obj->base,
-                                                     block_config->memConfig[obj->
-                                                                             smif_active_slot],
-                                                     &isQuadEnabled,
+                            Cy_SMIF_MemIsQuadEnabled(obj->base, memCfg, &isQuadEnabled,
                                                      &obj->mem_context->smif_context);
+
                         if ((CY_SMIF_SUCCESS == smif_status) && !isQuadEnabled)
                         {
                             smif_status =
-                                Cy_SMIF_MemEnableQuadMode(obj->base,
-                                                          block_config->memConfig[obj->
-                                                                                  smif_active_slot],
+                                Cy_SMIF_MemEnableQuadMode(obj->base, memCfg,
                                                           MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US,
                                                           &obj->mem_context->smif_context);
+
+                            // Cy_SMIF_MemEnableQuadMode() samples the busy status once with no
+                            // delay, so it can return before the memory has raised WIP for the
+                            // ongoing register write. Read the QE bit back more than once.
+                            uint32_t attempt = 0U;
+                            while ((CY_SMIF_SUCCESS == smif_status) && !isQuadEnabled &&
+                                   (attempt < MTB_SERIAL_MEMORY_QUAD_ENABLE_MAX_ATTEMPTS))
+                            {
+                                smif_status =
+                                    Cy_SMIF_MemIsReady(obj->base, memCfg,
+                                                       MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US,
+                                                       &obj->mem_context->smif_context);
+                                if (CY_SMIF_SUCCESS == smif_status)
+                                {
+                                    smif_status =
+                                        Cy_SMIF_MemIsQuadEnabled(obj->base, memCfg, &isQuadEnabled,
+                                                                 &obj->mem_context->smif_context);
+                                }
+
+                                attempt++;
+                            }
+
+                            if ((CY_SMIF_SUCCESS == smif_status) && !isQuadEnabled)
+                            {
+                                result = MTB_RSLT_SERIAL_MEMORY_ERR_QUAD_ENABLE;
+                            }
                         }
                     }
                 }
@@ -660,12 +752,14 @@ cy_rslt_t mtb_serial_memory_read(mtb_serial_memory_t* obj, uint32_t addr, size_t
             else if ((!_MTB_SERIAL_MEMORY_IS_EVEN(addr)) && (length == 1))
             {
                 uint32_t temp_addr = addr - 1;
-                uint8_t temp_buf[2];
-                memset(temp_buf, 0, length+1);
-                // Cy_SMIF_MemNumRead() returns error if (addr + length) > total memory size.
-                result = (cy_rslt_t)Cy_SMIF_MemNumRead(obj->mem_context, memnum, addr, buf,
-                                                       length + 1);
-                memcpy(buf, &temp_buf[1], length);
+                uint8_t temp_buf[2] = {0};
+                // Read the even address preceding addr plus the requested byte into a local buffer.
+                result = (cy_rslt_t)Cy_SMIF_MemNumRead(obj->mem_context, memnum, temp_addr,
+                                                       temp_buf, sizeof(temp_buf));
+                if (CY_RSLT_SUCCESS == result)
+                {
+                    buf[0] = temp_buf[1];
+                }
             }
             else
             {
@@ -793,12 +887,20 @@ cy_rslt_t mtb_serial_memory_erase(mtb_serial_memory_t* obj, uint32_t addr, size_
             }
             else
             {
-                // Cy_SMIF_MemEraseSector() returns error if (addr + length) > total memory size or
-                // if
-                // addr is not aligned to erase sector size or if (addr + length) is not aligned to
-                // erase sector size.
-                result =
-                    (cy_rslt_t)Cy_SMIF_MemNumEraseSector(obj->mem_context, memnum, addr, length);
+                // The PDL rounds an unaligned range outward and erases the rounded range, so
+                // reject it here. An out-of-range request is left to the PDL to report.
+                uint64_t end = (uint64_t)addr + (uint64_t)length;
+                if ((end <= (uint64_t)obj->mem_info->memSize) &&
+                    !(_mtb_serial_memory_is_sector_boundary(obj, addr) &&
+                      _mtb_serial_memory_is_sector_boundary(obj, (uint32_t)end)))
+                {
+                    result = MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM;
+                }
+                else
+                {
+                    result = (cy_rslt_t)Cy_SMIF_MemNumEraseSector(obj->mem_context, memnum, addr,
+                                                                  length);
+                }
             }
         }
         else
@@ -851,8 +953,17 @@ cy_rslt_t mtb_serial_memory_set_active_chip(mtb_serial_memory_t* obj,
             if (obj->mem_context->block_config->memConfig[i]->slaveSelect ==
                 (cy_en_smif_slave_select_t)chip_select)
             {
-                obj->smif_active_slot = i;
-                obj->chip_select = chip_select;
+                // Zero-initialized: for a HyperBus memory the PDL leaves the SPI-only fields unset.
+                cy_stc_smif_mem_info_t new_info = {0};
+                uint8_t memnum = _mtb_serial_memory_slaveslot_to_memnum(chip_select);
+
+                result = (cy_rslt_t)Cy_SMIF_MemNumGetInfo(obj->mem_context, memnum, &new_info);
+                if (CY_RSLT_SUCCESS == result)
+                {
+                    *obj->mem_info = new_info;
+                    obj->smif_active_slot = i;
+                    obj->chip_select = chip_select;
+                }
                 break;
             }
         }

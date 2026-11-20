@@ -3,12 +3,11 @@
  *
  * \brief
  * Provides APIs for interacting with an external memory connected to the SPI or
- * Serial Memory interface. Read is implemented as both blocking and non-blocking whereas
- * write, and erase are implemented as blocking functions.
+ * Serial Memory interface. Read, write, and erase are implemented as blocking functions.
  *
  ***************************************************************************************************
  * \copyright
- * Copyright 2018-2024 Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2018-2026 Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -51,7 +50,7 @@
  * then discard the extra byte returning to the user only the data they requested.
  *
  * For \ref mtb_serial_memory_write the function needs to take into consideration all four
- * possible combination of even/odd addresses and lengths:
+ * possible combinations of even/odd addresses and lengths:
  *  - For even addresses, even lengths the function directly calls the PDL write function, this is
  * the standard use case
  *  - For even addresses, length equal to one byte the function first reads the memory for 2 bytes
@@ -74,9 +73,22 @@
  *  an unsupported use case.
  *
  *
- * This special handling needs to be enabled by setting  define in
- * _MTB_SERIAL_MEMORY_EMULATE_BYTE_ADDRESSABLE
- * the application Makefile.
+ * This special handling needs to be enabled by setting the define
+ * _MTB_SERIAL_MEMORY_EMULATE_BYTE_ADDRESSABLE in the application Makefile:
+ * \code
+ * DEFINES+=_MTB_SERIAL_MEMORY_EMULATE_BYTE_ADDRESSABLE
+ * \endcode
+ *
+ * \note The library does not check for Octal or DDR operation. When the define is set, the
+ * handling applies to every SPI memory, including memories that natively support byte
+ * access (for example Single SPI or Quad SPI SDR):
+ *  - A read at an odd address is supported only with length equal to one byte, otherwise
+ *  \ref MTB_RSLT_SERIAL_MEMORY_ERR_UNSUPPORTED is returned
+ *  - A write is supported only for an even address with an even length, or with length equal
+ *  to one byte, otherwise \ref MTB_RSLT_SERIAL_MEMORY_ERR_UNSUPPORTED is returned
+ *  - A write of one byte always uses the two-byte read-modify-write sequence described above
+ *
+ * HyperBus memories are not affected by this define.
  *
  */
 
@@ -92,10 +104,30 @@
 #endif /* #if defined(MTB_SERIAL_MEMORY_THREAD_SAFE) */
 
 #ifdef DOXYGEN
-/** Enables thread-safety for use with multi-threaded RTOS environment. */
+/** Enables thread-safety for use with multi-threaded RTOS environment.
+ *  When defined, \ref mtb_serial_memory_read, \ref mtb_serial_memory_write and
+ *  \ref mtb_serial_memory_erase take a mutex that belongs to the \ref mtb_serial_memory_t object.
+ *  The other functions (for example \ref mtb_serial_memory_set_active_chip,
+ *  \ref mtb_serial_memory_enable_xip and \ref mtb_serial_memory_set_write_enable) are not
+ *  protected, the application must serialize calls to them and to the protected functions.
+ *  Thread-safety is not provided between different objects or between CPU cores.
+ */
 #define MTB_SERIAL_MEMORY_THREAD_SAFE
 /** The MXSMIF IP is available. */
 #define CY_IP_MXSMIF
+/** Timeout in microseconds for each poll of the memory ready status during the quad enable
+ *  sequence of \ref mtb_serial_memory_setup. Default: 5000. Define it in the application
+ *  Makefile to override, for example DEFINES+=MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US=1000000.
+ */
+#define MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US
+/** Number of times the memory ready status and the QE bit are read back after the quad enable
+ *  command has been sent. Default: 3. The value must be at least 1: with 0 no readback is done
+ *  and \ref mtb_serial_memory_setup returns \ref MTB_RSLT_SERIAL_MEMORY_ERR_QUAD_ENABLE
+ *  whenever the QE bit had to be programmed. The quad enable command itself is sent only once,
+ *  more attempts do not resend it. The sequence ends early when the PDL returns an error status.
+ *  Define it in the application Makefile to override.
+ */
+#define MTB_SERIAL_MEMORY_QUAD_ENABLE_MAX_ATTEMPTS
 #endif /* #ifdef DOXYGEN */
 
 #ifdef CY_IP_MXSMIF
@@ -115,7 +147,10 @@ extern "C" {
 #define MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM \
     (CY_RSLT_CREATE(CY_RSLT_TYPE_ERROR, CY_RSLT_MODULE_BOARD_LIB_SERIAL_MEMORY, 2))
 
-/** A previously initiated read operation is not yet complete */
+/** Reserved. This release has no asynchronous read, and the library does not return this value.
+ *  It is kept for compatibility with earlier versions: a previously initiated read operation
+ *  is not yet complete.
+ */
 #define MTB_RSLT_SERIAL_MEMORY_ERR_READ_BUSY \
     (CY_RSLT_CREATE(CY_RSLT_TYPE_ERROR, CY_RSLT_MODULE_BOARD_LIB_SERIAL_MEMORY, 3))
 
@@ -126,6 +161,13 @@ extern "C" {
 /** Setting rx capture mode failed. */
 #define MTB_RSLT_SERIAL_MEMORY_ERR_RX_CAPTURE \
     (CY_RSLT_CREATE(CY_RSLT_TYPE_ERROR, CY_RSLT_MODULE_BOARD_LIB_SERIAL_MEMORY, 5))
+
+/** Setting quad enabled failed: the QE bit did not read back as set.
+ *  See the quad enable note in README.md about
+ *  MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US.
+ */
+#define MTB_RSLT_SERIAL_MEMORY_ERR_QUAD_ENABLE \
+    (CY_RSLT_CREATE(CY_RSLT_TYPE_ERROR, CY_RSLT_MODULE_BOARD_LIB_SERIAL_MEMORY, 6))
 
 /**
  * Serial Memory Chip Select
@@ -182,15 +224,41 @@ typedef struct
  * It can either be called in a secure partition or in the non-secure partition
  * if the peripheral itself is not secured.
  *
+ * \note The object must be zero-initialized before the first call (for example a global or
+ * static object, or one cleared with memset), because the function updates its fields
+ * with read-modify-write operations. Call the function once per object, calling it again on an
+ * object that has been set up is not supported. The object, \p mem_context and \p mem_info
+ * must remain valid as long as the library is used.
+ *
+ * \note Octal memories (MXSMIF version 4 and later): the Octal enable command is sent only if
+ * the SMIF RX capture mode differs from the one the configuration requires. This function sets
+ * that capture mode before the check, so for a memory with an explicit part number the command
+ * is not sent. The memory must already be in Octal mode (SDR or DDR, as configured) when this
+ * function is called, for example because the boot path or the application switched it, or
+ * because the application executes from this memory (XIP). Otherwise the function still returns
+ * CY_RSLT_SUCCESS and the following operations fail, typically with CY_SMIF_EXCEED_TIMEOUT
+ * (0x00B20002). The PDL states that Cy_SMIF_MemOctalEnable() "must be executed before sending
+ * octal SPI commands to the memory device", so a memory that powers up in single SPI mode needs
+ * it from the application: start SMIF in normal SPI capture mode, call Cy_SMIF_MemNumInit(),
+ * Cy_SMIF_Enable(), Cy_SMIF_Reset_Memory(), Cy_SMIF_MemOctalEnable(), set the RX capture mode
+ * required by the configuration, and only then call this function. This is not needed for
+ * memories that power up in Octal mode, nor for Single, Dual and Quad SPI memories. The skip
+ * avoids a hang that can occur when SMIF is disabled and re-enabled while code executes from the
+ * same memory.
+ *
  * \param obj Pointer to the mtb_serial_memory_t object to setup
  * \param smif_active_chip The slave select line to configure as active
- * \param base Pointer to the SMIf base address
+ * \param base Pointer to the SMIF base address
  * \param clock Pointer to the clock object
  * \param mem_context Pointer to the SMIF Device internal context data
  * \param mem_info Pointer to the SMIF memory info structure
  * \param block_config Pointer to the SMIF block configuration structure
- * \returns CY_RSLT_SUCCESS if the setup was successful, an error code
- *          otherwise.
+ * \returns CY_RSLT_SUCCESS if the setup was successful,
+ *          \ref MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM if \p smif_active_chip is not configured in
+ *          \p block_config (nothing is modified in this case),
+ *          \ref MTB_RSLT_SERIAL_MEMORY_ERR_UNSUPPORTED if a memory uses "Auto Detect SFDP" and
+ *          the SMIF clock (HF clock frequency, divided by 2 for MXSMIF version 2 and later)
+ *          exceeds 50 MHz, an error code otherwise.
  */
 cy_rslt_t mtb_serial_memory_setup(
     mtb_serial_memory_t* obj,
@@ -213,7 +281,7 @@ cy_rslt_t mtb_serial_memory_setup(
  *
  * \param obj Pointer to the mtb_serial_memory_t object to setup
  * \param smif_active_chip The slave select line to configure as active
- * \param base Pointer to the SMIf base address
+ * \param base Pointer to the SMIF base address
  * \param mem_context Pointer to the SMIF Device internal context data
  * \param mem_info Pointer to the SMIF memory info structure
  * \returns CY_RSLT_SUCCESS if the setup was successful, an error code
@@ -245,17 +313,17 @@ size_t mtb_serial_memory_get_size(mtb_serial_memory_t* obj);
 size_t mtb_serial_memory_get_erase_size(mtb_serial_memory_t* obj, uint32_t addr);
 
 /**
- * \brief Returns the page size for programming of the sector to which the given
- * address belongs. Address is used only for a memory with hybrid sector size.
+ * \brief Returns the page size for programming of the memory.
  * \param obj Pointer to the mtb_serial_memory_t object to obtain information from.
- * \param addr Address that belongs to the sector for which size is returned.
+ * \param addr Not used in this release, the same value is returned for every address.
  * \returns Page size in bytes.
  */
 size_t mtb_serial_memory_get_prog_size(mtb_serial_memory_t* obj, uint32_t addr);
 
 /**
  * \brief Utility function to calculate the starting address of an erase sector
- * to which the given address belongs.
+ * to which the given address belongs. The calculation assumes that the erase sector size is a
+ * power of two.
  * \param obj Pointer to the mtb_serial_memory_t object to obtain information from.
  * \param addr Address in the sector for which the starting address is returned.
  * \returns Starting address of the sector
@@ -270,9 +338,13 @@ __STATIC_INLINE uint32_t mtb_serial_memory_get_sector_start_address(mtb_serial_m
 /**
  * \brief Reads data from the serial memory. This is a blocking
  * function. Returns error if (addr + length) exceeds the memory size.
+ * A read with length 0 returns an error. For SPI memories the read is done with the PDL MemNum
+ * read function, for HyperBus memories with the PDL HyperBus read function.
  * If _MTB_SERIAL_MEMORY_EMULATE_BYTE_ADDRESSABLE is set the function can
- * emulate byte addressable memories for Octal DDR memories and handle
- * one byte reads even at odd addresses.
+ * emulate byte addressable memories (intended for Octal DDR memories, but it applies to all SPI
+ * memories) and handle one byte reads even at odd addresses. With the define set, a read at an
+ * even address is passed to the PDL with any length, and a read at an odd address is supported
+ * only with length 1. See \ref section_serial_memory_octal_ddr_handling.
  *
  * \param obj Pointer to the mtb_serial_memory_t object to obtain information from.
  * \param addr Starting address to read from
@@ -287,10 +359,14 @@ cy_rslt_t mtb_serial_memory_read(mtb_serial_memory_t* obj, uint32_t addr, size_t
  * \brief Writes the data to the serial memory. The program area
  * must have been erased prior to calling this API using
  * \ref mtb_serial_memory_erase() This is a blocking function. Returns error if
- * (addr + length) exceeds the memory size. If _MTB_SERIAL_MEMORY_EMULATE_BYTE_ADDRESSABLE
- * is set the function can emulate byte addressable memories for Octal DDR memories
- * and handle one byte writes even at odd addresses. This however actually writes starting from
- * the previous even address and will always write two bytes.
+ * (addr + length) exceeds the memory size. A write with length 0 returns an error. For SPI
+ * memories the write is done with the PDL MemNum write function, for HyperBus memories with the
+ * PDL HyperBus write function.
+ * If _MTB_SERIAL_MEMORY_EMULATE_BYTE_ADDRESSABLE is set the function can emulate byte
+ * addressable memories (intended for Octal DDR memories, but it applies to all SPI memories)
+ * and handle one byte writes even at odd addresses. A one-byte write then programs two bytes,
+ * starting at the requested address rounded down to an even address. The other byte is kept by
+ * reading it first. See \ref section_serial_memory_octal_ddr_handling.
  * \param obj Pointer to the mtb_serial_memory_t object to write to.
  * \param addr Starting address to write to
  * \param length Number of bytes to write
@@ -304,19 +380,29 @@ cy_rslt_t mtb_serial_memory_write(mtb_serial_memory_t* obj, uint32_t addr, size_
 /**
  * \brief Erases the serial memory, uses chip erase command when
  * addr = 0 and length = flash_size otherwise uses sector erase command. This is
- * a blocking function. Returns error if addr or (addr + length) is not aligned
- * to the sector size or if (addr + length) exceeds the memory size.
- * For memories with hybrid sectors, returns error if the end address
- * (=addr + length) is not aligned to the size of the sector in which the end
- * address is located.
+ * a blocking function.
+ *
+ * \note \p addr and (\p addr + \p length) must be aligned to the erase sector size. For
+ * memories with hybrid sectors, each of the two addresses is checked against the sector size of the
+ * region it is located in, with the offset taken from the start of that region. An unaligned range
+ * is rejected with \ref MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM and nothing is erased. The sector
+ * erase is done by the PDL function Cy_SMIF_MemNumEraseSector(), which would otherwise round
+ * \p addr down and (\p addr + \p length) up to sector boundaries and erase the whole rounded
+ * range, so data outside the requested range could be lost.
+ * A range that exceeds the memory size is not checked by the library, the PDL status
+ * CY_SMIF_BAD_PARAM is returned for it and nothing is erased.
+ *
+ * Erase is supported only for SPI memories, for other memory types (for example HyperBus)
+ * \ref MTB_RSLT_SERIAL_MEMORY_ERR_UNSUPPORTED is returned.
  * Call \ref mtb_serial_memory_get_size() to get the flash size and
  * call \ref mtb_serial_memory_get_erase_size() to get the size of an erase
  * sector.
  * \param obj Pointer to the mtb_serial_memory_t object to erase.
  * \param addr Starting address to begin erasing
  * \param length Number of bytes to erase
- * \returns CY_RSLT_SUCCESS if the erase was successful, an error code
- *          otherwise.
+ * \returns CY_RSLT_SUCCESS if the erase was successful,
+ *          \ref MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM if the range is not aligned to the erase
+ *          sectors, an error code otherwise.
  */
 cy_rslt_t mtb_serial_memory_erase(mtb_serial_memory_t* obj, uint32_t addr, size_t length);
 
@@ -330,12 +416,20 @@ cy_rslt_t mtb_serial_memory_erase(mtb_serial_memory_t* obj, uint32_t addr, size_
 cy_rslt_t mtb_serial_memory_enable_xip(mtb_serial_memory_t* obj, bool enable);
 
 /**
- * \brief Sets the active memory device that the serial-flash functions perform
+ * \brief Sets the active memory device that the serial memory functions perform
  * the operations on.
+ * \note A successful \ref mtb_serial_memory_setup is a precondition. If it was not done,
+ * the function does not return an error: the check is made with CY_ASSERT, which halts the
+ * application when assertions are enabled.
+ * \note The memory information (size, erase size, program size, hybrid regions) of the selected
+ * memory is read again and replaces the information gathered by \ref mtb_serial_memory_setup, so
+ * the query functions always describe the active chip. The memories can have different geometry.
  * \param obj Pointer to the mtb_serial_memory_t object to set active chip for.
  * \param chip_select The chip select of the memory device to be set as active.
- * \returns The function will return an error if the device had not been setup
- * with \ref mtb_serial_memory_setup .
+ * \returns CY_RSLT_SUCCESS if the chip was set as active,
+ * \ref MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM if the chip select is not configured in the
+ * SMIF block configuration passed to \ref mtb_serial_memory_setup , a PDL SMIF status code if the
+ * memory information could not be read (the previous chip stays active in this case).
  */
 cy_rslt_t mtb_serial_memory_set_active_chip(mtb_serial_memory_t* obj,
                                             mtb_serial_memory_chip_select_t chip_select);
@@ -362,7 +456,7 @@ uint32_t mtb_serial_memory_get_active_chip(mtb_serial_memory_t* obj);
  * \param enable if true the command to be sent is Write Enable, if false the
  *  command to be sent is Write Disable.
  * \returns CY_RSLT_SUCCESS if the operation was successful, an error code
- * therwise.
+ * otherwise.
  */
 cy_rslt_t mtb_serial_memory_set_write_enable(mtb_serial_memory_t* obj, bool enable);
 

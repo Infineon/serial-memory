@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['serial_20memory_0',['Serial Memory',['../group__group__api__reference.html',1,'']]]
+  ['memory_0',['Serial Memory',['../group__group__api__reference.html',1,'']]]
 ];

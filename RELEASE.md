@@ -8,6 +8,14 @@ Provides functions for interacting with an external memory connected through its
 * Allows for providing information to the programming tool to program the external memory.
 
 ### What Changed?
+#### v3.3.0
+* Add configurable quad-enable retry loop with QE bit readback verification. New setting `MTB_SERIAL_MEMORY_QUAD_ENABLE_MAX_ATTEMPTS` (default 3) sets the number of readback attempts; the existing `MTB_SERIAL_MEMORY_QUAD_ENABLE_TIMEOUT_US` (default 5000 us) sets the timeout of each poll. See the quad enable note in README.md
+* `mtb_serial_memory_erase()` returns `MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM` and erases nothing when the start address or the end address (`addr + length`) is not aligned to the erase sector, including hybrid sector region boundaries
+* `mtb_serial_memory_set_active_chip()` reads the memory information (size, erase size, program size, hybrid regions) of the selected chip again, so the query functions describe the active chip
+* Fixed `mtb_serial_memory_read()` of one byte at an odd address when `_MTB_SERIAL_MEMORY_EMULATE_BYTE_ADDRESSABLE` is defined: it returned 0 and wrote past the caller's buffer. It now reads the two bytes that start at the preceding even address into a local buffer and returns the requested byte
+* Fixed the SFDP frequency check in `mtb_serial_memory_setup()`, which compared MHz with Hz and never triggered. Setup now returns `MTB_RSLT_SERIAL_MEMORY_ERR_UNSUPPORTED` when a memory uses "Auto Detect SFDP" and the SMIF clock (HF clock frequency, divided by 2 for MXSMIF version 2 and later) is above 50 MHz
+* `mtb_serial_memory_setup()` returns `MTB_RSLT_SERIAL_MEMORY_ERR_BAD_PARAM` and does not modify the object when the chip select is not configured in the SMIF block configuration
+* Documentation update
 #### v3.2.0
 * Fixed an issue with enabling octal mode for SMIF
 #### v3.1.0
@@ -41,8 +49,19 @@ Provides functions for interacting with an external memory connected through its
 #### v1.0.0
 * Initial release
 
+### Migration Notes
+The following APIs listed in the history above are not available in v3.3.0. Keep this in mind when moving an application from an earlier version:
+
+| Removed API | Replacement |
+| :--- | :--- |
+| `cy_serial_flash_qspi_read_async()`, `cy_serial_flash_qspi_abort_read()` | None. Reads are blocking only, use `mtb_serial_memory_read()` |
+| `cy_serial_flash_qspi_set_dma_interrupt_priority()` | None. The library does not use DMA |
+| Attach/detach functions (v1.4.3) | None. Initialize the SMIF driver in the application and pass the SMIF base, clock, context and block configuration to `mtb_serial_memory_setup()` |
+
+The `MTB_RSLT_SERIAL_MEMORY_ERR_READ_BUSY` error code is kept for compatibility but is not returned by this release.
+
 ### Supported Software and Tools
-This version of the Serial Flash library was validated for compatibility with the following Software and Tools:
+This version of the Serial Memory library was validated for compatibility with the following Software and Tools:
 
 | Software and Tools                        | Version |
 | :---                                      | :----:  |
@@ -52,6 +71,8 @@ This version of the Serial Flash library was validated for compatibility with th
 | ARM Compiler 6                            | 6.22    |
 
 Minimum required ModusToolbox™ Software Environment: v3.6
+
+The library requires a PDL that provides the SMIF MemNum API (`Cy_SMIF_MemNum*` functions) and a HAL that provides `mtb_hal.h`, both normally supplied by the BSP of the target.
 
 ### More information
 
@@ -63,5 +84,5 @@ Minimum required ModusToolbox™ Software Environment: v3.6
 
 ---
 # Copyright
-(c) (2019-2026), Infineon Technologies AG, or an affiliate of Infineon
+(c) (2018-2026), Infineon Technologies AG, or an affiliate of Infineon
 Technologies AG.  All rights reserved.

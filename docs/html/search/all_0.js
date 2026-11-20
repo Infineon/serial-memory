@@ -1,4 +1,5 @@
 var searchData=
 [
-  ['cy_5fip_5fmxsmif_0',['CY_IP_MXSMIF',['../group__group__api__reference.html#gaba152cdbee6337a0535daa88d8f071ab',1,'mtb_serial_memory.h']]]
+  ['and_20changelog_0',['Release Notes and Changelog',['../index.html#autotoc_md10',1,'']]],
+  ['and_20write_20enable_1',['Multiple memories, TrustZone and write enable',['../index.html#autotoc_md6',1,'']]]
 ];
